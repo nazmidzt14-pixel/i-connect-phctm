@@ -842,6 +842,7 @@ function freshState(){
     calMonth: new Date(2026,7,1),
     appointments:[],
     bookedSlots:[],
+    dayAvailability:{ slots:[], closed:false, reason:'' },
     pendingCancelId:null,
     lastBookingId:null,
   };
@@ -962,6 +963,58 @@ async function loadBookedSlots(){
     .neq('status', 'Cancelled');
   if(error){ console.error('loadBookedSlots error:', error); return; }
   state.bookedSlots = (data||[]).map(r => r.appointment_time.slice(0,5));
+}
+
+function genSlots(startHHMM, endHHMM, stepMin){
+  const slots = [];
+  const [sh,sm] = startHHMM.split(':').map(Number);
+  const [eh,em] = endHHMM.split(':').map(Number);
+  let cur = sh*60+sm;
+  const end = eh*60+em;
+  while(cur + stepMin <= end){
+    const h = String(Math.floor(cur/60)).padStart(2,'0');
+    const m = String(cur%60).padStart(2,'0');
+    slots.push(`${h}:${m}`);
+    cur += stepMin;
+  }
+  return slots;
+}
+
+async function loadDayAvailability(){
+  const b = state.booking;
+  state.dayAvailability = { slots:[], closed:false, reason:'' };
+  if(!b.date || !b.officer) return;
+
+  const dow = new Date(b.date+'T00:00:00').getDay(); // 0=Sun..6=Sat
+  const dowIso = dow===0 ? 7 : dow; // our schema uses 1=Mon..5=Fri
+
+  const [tmplRes, overrideRes] = await Promise.all([
+    sb.from('availability_templates').select('*')
+      .eq('team_member_id', b.officer).eq('day_of_week', dowIso).maybeSingle(),
+    sb.from('availability_overrides').select('*')
+      .eq('team_member_id', b.officer).eq('date', b.date).maybeSingle(),
+  ]);
+
+  const override = overrideRes.data;
+  if(override && override.is_available === false){
+    state.dayAvailability = { slots:[], closed:true, reason: override.reason || '' };
+    return;
+  }
+
+  let startTime, endTime, stepMin = 30;
+  if(override && override.is_available === true && override.start_time && override.end_time){
+    startTime = override.start_time.slice(0,5);
+    endTime = override.end_time.slice(0,5);
+  } else if(tmplRes.data){
+    startTime = tmplRes.data.start_time.slice(0,5);
+    endTime = tmplRes.data.end_time.slice(0,5);
+    stepMin = tmplRes.data.slot_duration_minutes || 30;
+  } else {
+    state.dayAvailability = { slots:[], closed:true, reason:'' };
+    return;
+  }
+
+  state.dayAvailability = { slots: genSlots(startTime, endTime, stepMin), closed:false, reason:'' };
 }
 
 
@@ -1371,7 +1424,7 @@ function wizardNav(nextEnabled, nextLabel){
 async function wizardNext(){
   if(state.step===4){
     setBtnLoading('wizard-next-btn', true, state.lang==='ms' ? 'Menyemak...' : 'Checking...');
-    await loadBookedSlots();
+    await Promise.all([loadDayAvailability(), loadBookedSlots()]);
     setBtnLoading('wizard-next-btn', false);
     goStep(5);
     return;
@@ -1506,17 +1559,29 @@ function selectDate(key){ state.booking.date = key; state.booking.time = null; s
 // Step 5
 function step5Time(){
   const b = state.booking;
+  const day = state.dayAvailability || { slots:[], closed:false };
   const unavailable = state.bookedSlots || [];
-  const allBooked = SLOT_TEMPLATE.every(s=>unavailable.includes(s.time));
+  const daySlots = day.slots || [];
+  const allBooked = daySlots.length > 0 && daySlots.every(t=>unavailable.includes(t));
+
+  if(day.closed || daySlots.length === 0){
+    return `
+      <p style="font-size:13px;color:var(--ink-muted);margin-bottom:14px;">${t('availableSlotsForPrefix')} <strong style="color:var(--ink);">${fmtDate(b.date)}</strong></p>
+      <div class="task-note">${state.lang==='ms' ? 'Pegawai ini tidak bertugas pada tarikh ini. Sila kembali dan pilih tarikh lain.' : 'This officer is not available on this date. Please go back and pick another date.'}</div>
+      ${wizardNav(false)}
+    `;
+  }
+
   return `
     <p style="font-size:13px;color:var(--ink-muted);margin-bottom:14px;">${t('availableSlotsForPrefix')} <strong style="color:var(--ink);">${fmtDate(b.date)}</strong></p>
     ${allBooked ? `<div class="task-note">${t('allBookedNote')}</div>` : ''}
     <div class="slot-grid">
-      ${SLOT_TEMPLATE.map(s=>{
-        const isUnavail = unavailable.includes(s.time);
-        const selected = b.time===s.time;
-        return `<button class="slot-btn ${selected?'selected':''}" ${isUnavail?'disabled':''} onclick="selectTime('${s.time}','${s.label}')">
-          ${s.label}<span class="sub">${isUnavail?t('unavailableLabel'):'MYT'}</span>
+      ${daySlots.map(time24=>{
+        const label = timeLabelFrom24h(time24+':00');
+        const isUnavail = unavailable.includes(time24);
+        const selected = b.time===time24;
+        return `<button class="slot-btn ${selected?'selected':''}" ${isUnavail?'disabled':''} onclick="selectTime('${time24}','${label}')">
+          ${label}<span class="sub">${isUnavail?t('unavailableLabel'):'MYT'}</span>
         </button>`;
       }).join('')}
     </div>
