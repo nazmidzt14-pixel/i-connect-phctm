@@ -782,7 +782,7 @@ function updateLangToggleUI(){
 }
 
 /* ============================= MOCK DATA ============================= */
-const SERVICES = [
+let SERVICES = [
   { id:'penerbitan', name:'Perundingan Penerbitan',
     desc:{ en:'Consultation on journals, proceedings, books, book chapters, policy papers, technical/research reports, seminar material, and monographs.',
            ms:'Khidmat runding berkaitan jurnal, prosiding, buku, bab buku, kertas polisi, laporan teknikal/penyelidikan, bahan seminar, dan monograf.' },
@@ -797,7 +797,7 @@ const SERVICES = [
     icon:'grad' },
 ];
 
-const OFFICERS = [
+let OFFICERS = [
   { id:'hafiz', name:"TS. Md Hafiz Ahmad Zulkifli",
     role:{ en:'Senior Librarian', ms:'Pustakawan Kanan' }, email:'hafiz_az@ukm.edu.my', phone:'03-9145 5336',
     services:['penerbitan','esumber'],
@@ -826,11 +826,6 @@ const SLOT_TEMPLATE = [
   { time:'15:30', label:'3:30 PM' },
 ];
 
-// demo unavailability: date -> array of unavailable slot times
-const UNAVAILABLE = {
-  '2026-08-12': ['14:30','15:00','15:30'], // fully booked — try this date to see "Unavailable"
-  '2026-08-07': ['15:00'],
-};
 
 
 /* ============================= STATE ============================= */
@@ -845,21 +840,15 @@ function freshState(){
     step:1,
     booking:{ service:null, officer:null, type:null, date:null, time:null, purpose:'' },
     calMonth: new Date(2026,7,1),
-    appointments:[
-      { id:'BK-20260810-01', service:'Perundingan Penerbitan', officerName:"Wan Nur 'Afifah Wan Yahya", type:'Bersemuka',
-        date:'2026-08-10', time:'2:30 PM', status:'Upcoming', purpose:'Semakan manuskrip untuk jurnal Q2' },
-      { id:'BK-20260728-02', service:'e-Sumber@PTSL', officerName:'Qurratul Syaheera Ahmad Termizi', type:'Online Video',
-        date:'2026-07-28', time:'3:00 PM', status:'Completed', purpose:'Bantuan carian Scopus', meetingLink:'https://meet.google.com/abc-defg-hij' },
-      { id:'BK-20260715-03', service:'Kursus Kemahiran Maklumat', officerName:'Qurratul Syaheera Ahmad Termizi', type:'Bersemuka',
-        date:'2026-07-15', time:'3:30 PM', status:'Cancelled', purpose:'Latihan EndNote asas' },
-    ],
+    appointments:[],
+    bookedSlots:[],
     pendingCancelId:null,
     lastBookingId:null,
   };
 }
 state = freshState();
 
-function resetPrototype(){ const lang = state.lang; state = freshState(); state.lang = lang; render(); updateLangToggleUI(); toast(state.lang==='ms' ? 'Prototaip diset semula' : 'Prototype reset','success'); window.scrollTo(0,0); }
+function resetPrototype(){ const lang = state.lang; sb.auth.signOut(); state = freshState(); state.lang = lang; render(); updateLangToggleUI(); toast(state.lang==='ms' ? 'Prototaip diset semula' : 'Prototype reset','success'); window.scrollTo(0,0); }
 
 /* ============================= ICONS ============================= */
 const ICONS = {
@@ -900,6 +889,82 @@ function toast(msg, type){
 function serviceById(id){ return SERVICES.find(s=>s.id===id); }
 function officerById(id){ return OFFICERS.find(o=>o.id===id); }
 
+function timeLabelFrom24h(hhmmss){
+  const [h,m] = hhmmss.split(':').map(Number);
+  const period = h >= 12 ? 'PM' : 'AM';
+  const h12 = ((h+11)%12)+1;
+  return `${h12}:${String(m).padStart(2,'0')} ${period}`;
+}
+
+async function loadDirectory(){
+  try{
+    const [svcRes, tmRes, linkRes] = await Promise.all([
+      sb.from('services').select('*'),
+      sb.from('team_members').select('*'),
+      sb.from('team_member_services').select('*'),
+    ]);
+    if(svcRes.error) throw svcRes.error;
+    if(tmRes.error) throw tmRes.error;
+    if(linkRes.error) throw linkRes.error;
+
+    const iconMap = { penerbitan:'book', esumber:'db', kursus:'grad' };
+    SERVICES = svcRes.data.map(s => ({
+      id: s.id, slug: s.slug, name: s.name,
+      desc: { en: s.description_en, ms: s.description_ms },
+      icon: iconMap[s.slug] || 'book',
+    }));
+    OFFICERS = tmRes.data.map(o => ({
+      id: o.id, slug: o.slug, name: o.name,
+      role: { en: o.position_en, ms: o.position_ms },
+      email: o.email, phone: o.phone,
+      expertise: { en: o.expertise_en, ms: o.expertise_ms },
+      services: linkRes.data.filter(l => l.team_member_id === o.id).map(l => l.service_id),
+    }));
+  } catch(e){
+    console.error('loadDirectory error, guna data sandaran:', e);
+  }
+}
+
+async function loadMyAppointments(){
+  if(!state.user) return;
+  const { data, error } = await sb.from('appointments')
+    .select('*, services(name), team_members(name)')
+    .eq('user_id', state.user.id)
+    .order('appointment_date', { ascending:true });
+  if(error){ console.error('loadMyAppointments error:', error); state.appointments = []; return; }
+  state.appointments = (data||[]).map(a => ({
+    id: a.booking_ref,
+    dbId: a.id,
+    service: a.services ? a.services.name : '',
+    officerName: a.team_members ? a.team_members.name : '',
+    type: a.appointment_type,
+    date: a.appointment_date,
+    time: timeLabelFrom24h(a.appointment_time),
+    status: a.status,
+    purpose: a.purpose,
+    meetingLink: a.meeting_link,
+    serviceId: a.service_id,
+    officerId: a.team_member_id,
+  }));
+}
+
+async function loadAppData(){
+  await Promise.all([loadDirectory(), loadMyAppointments()]);
+}
+
+async function loadBookedSlots(){
+  const b = state.booking;
+  state.bookedSlots = [];
+  const { data, error } = await sb.from('appointments')
+    .select('appointment_time')
+    .eq('team_member_id', b.officer)
+    .eq('appointment_date', b.date)
+    .neq('status', 'Cancelled');
+  if(error){ console.error('loadBookedSlots error:', error); return; }
+  state.bookedSlots = (data||[]).map(r => r.appointment_time.slice(0,5));
+}
+
+
 /* ============================= NAVIGATION ============================= */
 function go(view){
   state.view = view;
@@ -909,9 +974,12 @@ function go(view){
 }
 function goStep(n){ state.step = n; render(); window.scrollTo(0,0); }
 function quickBookCTA(){
-  if(!state.user){ state.user = { name:'Ahmad Zaki bin Ismail', email:'ahmad.zaki@ukm.edu.my', org:'Fakulti Perubatan, UKM' }; }
+  if(!state.user){
+    go('login');
+    toast(state.lang==='ms' ? 'Sila log masuk dahulu untuk menempah' : 'Please log in first to book','error');
+    return;
+  }
   go('book');
-  toast(t('loginSuccessToast'),'success');
 }
 
 /* ============================= RENDER ROOT ============================= */
@@ -1083,6 +1151,7 @@ async function doLogin(){
     email: data.user.email,
     org: profile ? profile.organisation : ''
   };
+  await loadAppData();
   go('dashboard');
   toast(t('loginSuccessToast'),'success');
 }
@@ -1118,6 +1187,7 @@ async function doRegister(){
 
   if(data.session){
     state.user = { id: data.user.id, name, email, org };
+    await loadAppData();
     go('dashboard');
     toast(t('registerSuccessToast'),'success');
   } else {
@@ -1295,11 +1365,18 @@ function renderBookStep(){
 function wizardNav(nextEnabled, nextLabel){
   return `<div class="wizard-actions">
     ${state.step>1 ? `<button class="btn btn-ghost" onclick="goStep(${state.step-1})">${ICONS.chevL} ${t('backBtn')}</button>` : `<span></span>`}
-    <button class="btn btn-primary" ${nextEnabled?'':'disabled'} onclick="wizardNext()">${nextLabel||t('continueBtn')}</button>
+    <button class="btn btn-primary" id="wizard-next-btn" ${nextEnabled?'':'disabled'} onclick="wizardNext()">${nextLabel||t('continueBtn')}</button>
   </div>`;
 }
-function wizardNext(){
-  if(state.step===7){ confirmBooking(); return; }
+async function wizardNext(){
+  if(state.step===4){
+    setBtnLoading('wizard-next-btn', true, state.lang==='ms' ? 'Menyemak...' : 'Checking...');
+    await loadBookedSlots();
+    setBtnLoading('wizard-next-btn', false);
+    goStep(5);
+    return;
+  }
+  if(state.step===7){ await confirmBooking(); return; }
   goStep(state.step+1);
 }
 
@@ -1424,12 +1501,12 @@ function shiftMonth(dir){
     state.calMonth = next; render();
   }
 }
-function selectDate(key){ state.booking.date = key; state.booking.time = null; render(); }
+function selectDate(key){ state.booking.date = key; state.booking.time = null; state.bookedSlots = []; render(); }
 
 // Step 5
 function step5Time(){
   const b = state.booking;
-  const unavailable = UNAVAILABLE[b.date] || [];
+  const unavailable = state.bookedSlots || [];
   const allBooked = SLOT_TEMPLATE.every(s=>unavailable.includes(s.time));
   return `
     <p style="font-size:13px;color:var(--ink-muted);margin-bottom:14px;">${t('availableSlotsForPrefix')} <strong style="color:var(--ink);">${fmtDate(b.date)}</strong></p>
@@ -1485,18 +1562,56 @@ function step7Summary(){
     ${wizardNav(true, t('confirmBookingBtn'))}
   `;
 }
-function confirmBooking(){
+async function confirmBooking(){
   const b = state.booking;
-  const svc = serviceById(b.service);
-  const off = officerById(b.officer);
-  const id = 'BK-' + b.date.replace(/-/g,'') + '-' + Math.floor(Math.random()*90+10);
-  const appt = {
-    id, service:svc.name, officerName:off.name, type:b.type, date:b.date, time:b.timeLabel,
-    status:'Upcoming', purpose:b.purpose,
-    meetingLink: b.type==='Online Video' ? null : undefined,
-  };
-  state.appointments.unshift(appt);
-  state.lastBookingId = id;
+  setBtnLoading('wizard-next-btn', true, state.lang==='ms' ? 'Menyimpan...' : 'Saving...');
+
+  if(b.rescheduleOf){
+    const { error } = await sb.from('appointments').update({
+      appointment_date: b.date,
+      appointment_time: b.time,
+      status: 'Upcoming',
+      updated_at: new Date().toISOString(),
+    }).eq('id', b.rescheduleOf);
+    setBtnLoading('wizard-next-btn', false);
+    if(error){
+      if(error.code === '23505'){
+        toast(state.lang==='ms' ? 'Maaf, slot ini baru sahaja ditempah. Sila pilih masa lain.' : 'Sorry, this slot was just taken. Please pick another time.', 'error');
+        await loadBookedSlots(); goStep(5); return;
+      }
+      toast((state.lang==='ms'?'Jadual semula gagal: ':'Reschedule failed: ')+error.message, 'error');
+      return;
+    }
+    await loadAppData();
+    toast(t('toastRescheduled'), 'success');
+    go('myapts');
+    return;
+  }
+
+  const { data, error } = await sb.from('appointments').insert({
+    user_id: state.user.id,
+    service_id: b.service,
+    team_member_id: b.officer,
+    appointment_type: b.type,
+    appointment_date: b.date,
+    appointment_time: b.time,
+    purpose: b.purpose,
+    meeting_link_status: b.type==='Online Video' ? 'pending' : 'not_applicable',
+  }).select().single();
+
+  setBtnLoading('wizard-next-btn', false);
+
+  if(error){
+    if(error.code === '23505'){
+      toast(state.lang==='ms' ? 'Maaf, slot ini baru sahaja ditempah orang lain. Sila pilih masa lain.' : 'Sorry, this slot was just booked by someone else. Please pick another time.', 'error');
+      await loadBookedSlots(); goStep(5); return;
+    }
+    toast((state.lang==='ms'?'Tempahan gagal: ':'Booking failed: ')+error.message, 'error');
+    return;
+  }
+
+  await loadAppData();
+  state.lastBookingId = data.booking_ref;
   state.view = 'success';
   render();
   window.scrollTo(0,0);
@@ -1585,10 +1700,16 @@ function viewAppt(id){
 function rescheduleAppt(id){
   const a = state.appointments.find(x=>x.id===id);
   if(!a) return;
-  a.status = 'Rescheduled';
+  state.booking = {
+    service: a.serviceId, officer: a.officerId, type: a.type,
+    date: null, time: null, timeLabel: null, purpose: a.purpose,
+    rescheduleOf: a.dbId,
+  };
+  state.bookedSlots = [];
+  state.view = 'book';
+  state.step = 4;
   render();
-  toast(t('toastRescheduled'),'success');
-  setTimeout(()=>{ a.status='Upcoming'; render(); }, 3000);
+  window.scrollTo(0,0);
 }
 function askCancel(id){ state.pendingCancelId = id; render(); }
 function renderCancelModal(){
@@ -1607,10 +1728,18 @@ function renderCancelModal(){
     </div>
   `;
 }
-function confirmCancel(){
+async function confirmCancel(){
   const a = state.appointments.find(x=>x.id===state.pendingCancelId);
-  if(a) a.status = 'Cancelled';
+  const cancelId = state.pendingCancelId;
   state.pendingCancelId = null;
+  if(!a){ render(); return; }
+  const { error } = await sb.from('appointments').update({ status:'Cancelled', updated_at:new Date().toISOString() }).eq('id', a.dbId);
+  if(error){
+    toast((state.lang==='ms'?'Gagal batal: ':'Failed to cancel: ')+error.message, 'error');
+    render();
+    return;
+  }
+  await loadAppData();
   render();
   toast(t('toastCancelled'),'success');
 }
@@ -1640,6 +1769,7 @@ async function initApp(){
       email: data.session.user.email,
       org: profile ? profile.organisation : ''
     };
+    await loadAppData();
     state.view = 'dashboard';
   }
   render();
