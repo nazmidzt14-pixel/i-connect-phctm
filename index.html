@@ -313,6 +313,16 @@
   /* Cards / lists */
   .card{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-xs);}
   .list-row{display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid var(--border-soft); gap:14px; flex-wrap:wrap;}
+  .admin-filters{display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap;}
+  .admin-filter-btn{
+    background:#fff; border:1.5px solid var(--border); border-radius:var(--radius-pill); padding:8px 16px;
+    font-size:12.5px; font-weight:700; color:var(--ink-muted); display:flex; align-items:center; gap:7px;
+    transition:all .15s; font-family:var(--font-body);
+  }
+  .admin-filter-btn:hover{border-color:var(--blue-700); color:var(--ink);}
+  .admin-filter-btn.active{background:var(--blue-700); border-color:var(--blue-700); color:#fff;}
+  .admin-filter-btn .cnt{background:rgba(11,15,30,.08); border-radius:999px; padding:1px 7px; font-size:11px;}
+  .admin-filter-btn.active .cnt{background:rgba(255,255,255,.25);}
   .list-row:last-child{border-bottom:none;}
   .list-row-main{min-width:0;}
   .list-row-main .title{font-weight:700; font-size:14.5px;}
@@ -643,6 +653,20 @@ const I18N = {
     alertTime: 'Time', alertStatus: 'Status', alertPurpose: 'Purpose', alertMeetingLink: 'Meeting link',
     alertPending: 'Pending — will be shared before the appointment',
     noBookingFound: 'No booking found.',
+
+    navAdmin: 'Admin',
+    adminEyebrow: 'Administration',
+    adminTitle: 'All Appointments',
+    adminSub: 'View and manage every booking across the library.',
+    adminFilterAll: 'All statuses',
+    adminBooker: 'Booked by',
+    adminMarkComplete: 'Mark Completed',
+    adminMeetingLinkLabel: 'Meeting link',
+    adminMeetingLinkPlaceholder: 'https://meet.google.com/...',
+    adminSaveLink: 'Save link',
+    adminNoAppointments: 'No appointments match this filter.',
+    adminStatusUpdated: 'Status updated',
+    adminLinkSaved: 'Meeting link saved',
   },
   ms: {
     protoNotice: 'Prototaip boleh klik — <b>tiada data meninggalkan halaman ini</b>, semuanya set semula apabila dimuat semula.',
@@ -741,6 +765,20 @@ const I18N = {
     alertTime: 'Masa', alertStatus: 'Status', alertPurpose: 'Tujuan', alertMeetingLink: 'Pautan mesyuarat',
     alertPending: 'Belum sedia — akan dikongsi sebelum janji temu',
     noBookingFound: 'Tiada tempahan dijumpai.',
+
+    navAdmin: 'Admin',
+    adminEyebrow: 'Pentadbiran',
+    adminTitle: 'Semua Janji Temu',
+    adminSub: 'Lihat dan urus setiap tempahan di seluruh perpustakaan.',
+    adminFilterAll: 'Semua status',
+    adminBooker: 'Ditempah oleh',
+    adminMarkComplete: 'Tandakan Selesai',
+    adminMeetingLinkLabel: 'Pautan mesyuarat',
+    adminMeetingLinkPlaceholder: 'https://meet.google.com/...',
+    adminSaveLink: 'Simpan pautan',
+    adminNoAppointments: 'Tiada tempahan sepadan dengan tapisan ini.',
+    adminStatusUpdated: 'Status dikemas kini',
+    adminLinkSaved: 'Pautan mesyuarat disimpan',
   },
 };
 function t(key){ return (I18N[state.lang] && I18N[state.lang][key]) || I18N.en[key] || key; }
@@ -841,6 +879,8 @@ function freshState(){
     booking:{ service:null, officer:null, type:null, date:null, time:null, purpose:'' },
     calMonth: new Date(2026,7,1),
     appointments:[],
+    allAppointments:[],
+    adminStatusFilter:'all',
     bookedSlots:[],
     dayAvailability:{ slots:[], closed:false, reason:'' },
     pendingCancelId:null,
@@ -953,6 +993,29 @@ async function loadAppData(){
   await Promise.all([loadDirectory(), loadMyAppointments()]);
 }
 
+async function loadAllAppointments(){
+  if(!isAdmin()) return;
+  const { data, error } = await sb.from('appointments')
+    .select('*, services(name), team_members(name), profiles(full_name, email, organisation)')
+    .order('appointment_date', { ascending:false });
+  if(error){ console.error('loadAllAppointments error:', error); state.allAppointments = []; return; }
+  state.allAppointments = (data||[]).map(a => ({
+    id: a.booking_ref,
+    dbId: a.id,
+    service: a.services ? a.services.name : '',
+    officerName: a.team_members ? a.team_members.name : '',
+    bookerName: a.profiles ? a.profiles.full_name : '',
+    bookerEmail: a.profiles ? a.profiles.email : '',
+    type: a.appointment_type,
+    date: a.appointment_date,
+    time: timeLabelFrom24h(a.appointment_time),
+    status: a.status,
+    purpose: a.purpose,
+    meetingLink: a.meeting_link,
+    meetingLinkStatus: a.meeting_link_status,
+  }));
+}
+
 async function loadBookedSlots(){
   const b = state.booking;
   state.bookedSlots = [];
@@ -1019,9 +1082,10 @@ async function loadDayAvailability(){
 
 
 /* ============================= NAVIGATION ============================= */
-function go(view){
+async function go(view){
   state.view = view;
   if(view==='book'){ state.step = 1; state.booking = { service:null, officer:null, type:null, date:null, time:null, purpose:'' }; }
+  if(view==='admin' && isAdmin()){ render(); await loadAllAppointments(); }
   render();
   window.scrollTo(0,0);
 }
@@ -1185,6 +1249,7 @@ async function loadProfile(userId){
   if(error){ console.error('loadProfile error:', error); return null; }
   return data;
 }
+function isAdmin(){ return !!(state.user && state.user.role === 'admin'); }
 
 async function doLogin(){
   const email = (document.getElementById('li-email').value || '').trim();
@@ -1202,7 +1267,8 @@ async function doLogin(){
     id: data.user.id,
     name: profile ? profile.full_name : data.user.email,
     email: data.user.email,
-    org: profile ? profile.organisation : ''
+    org: profile ? profile.organisation : '',
+    role: profile ? profile.role : 'user'
   };
   await loadAppData();
   go('dashboard');
@@ -1239,7 +1305,7 @@ async function doRegister(){
   if(error){ toast(error.message, 'error'); return; }
 
   if(data.session){
-    state.user = { id: data.user.id, name, email, org };
+    state.user = { id: data.user.id, name, email, org, role: 'user' };
     await loadAppData();
     go('dashboard');
     toast(t('registerSuccessToast'),'success');
@@ -1284,6 +1350,7 @@ function renderShell(){
       ${navItem('book','calendar',t('navBook'))}
       ${navItem('myapts','list',t('navMyApts'))}
       ${navItem('profile','user',t('navProfile'))}
+      ${isAdmin() ? navItem('admin','db',t('navAdmin')) : ''}
       <div class="nav-spacer"></div>
       <div class="sidebar-foot">
         ${`<button class="nav-item" onclick="doLogout()">${ICONS.logout}<span>${t('navLogout')}</span></button>`}
@@ -1309,7 +1376,7 @@ function renderShell(){
   `;
 }
 function topbarTitle(){
-  return { dashboard:t('navDashboard'), book:t('navBook'), myapts:t('navMyApts'), profile:t('navProfile') }[state.view] || 'i-Connect @ PHCTM';
+  return { dashboard:t('navDashboard'), book:t('navBook'), myapts:t('navMyApts'), profile:t('navProfile'), admin:t('navAdmin') }[state.view] || 'i-Connect @ PHCTM';
 }
 function renderView(){
   switch(state.view){
@@ -1318,6 +1385,7 @@ function renderView(){
     case 'myapts': return renderMyAppointments();
     case 'profile': return renderProfile();
     case 'success': return renderSuccess();
+    case 'admin': return isAdmin() ? renderAdmin() : renderDashboard();
     default: return renderDashboard();
   }
 }
@@ -1732,10 +1800,80 @@ function renderMyAppointments(){
     </div>
   `;
 }
+function renderAdmin(){
+  const list = state.allAppointments || [];
+  const filter = state.adminFilter || 'All';
+  const filtered = filter==='All' ? list : list.filter(a=>a.status===filter);
+  const counts = {
+    All: list.length,
+    Upcoming: list.filter(a=>a.status==='Upcoming').length,
+    Completed: list.filter(a=>a.status==='Completed').length,
+    Cancelled: list.filter(a=>a.status==='Cancelled').length,
+  };
+  const filterLabel = (f) => f==='All' ? (state.lang==='ms'?'Semua':'All') : statusLabel(f);
+  return `
+    <div class="page-head">
+      <div class="eyebrow" style="margin-bottom:6px;">${state.lang==='ms'?'Pentadbiran':'Administration'}</div>
+      <h1>${t('navAdmin')}</h1>
+      <p>${state.lang==='ms' ? 'Urus semua tempahan merentasi Perpustakaan PHCTM.' : 'Manage all appointments across the PHCTM Library.'}</p>
+    </div>
+    <div class="admin-filters">
+      ${['All','Upcoming','Completed','Cancelled'].map(f=>`
+        <button class="admin-filter-btn ${filter===f?'active':''}" onclick="setAdminFilter('${f}')">${filterLabel(f)} <span class="cnt">${counts[f]}</span></button>
+      `).join('')}
+    </div>
+    <div class="card">
+      ${filtered.length ? filtered.map(a=>adminRow(a)).join('') : `<div class="empty-state">${state.lang==='ms'?'Tiada tempahan untuk penapis ini.':'No appointments for this filter.'}</div>`}
+    </div>
+  `;
+}
+
+function adminRow(a){
+  const badgeClass = { Upcoming:'badge-upcoming', Completed:'badge-completed', Cancelled:'badge-cancelled', Rescheduled:'badge-rescheduled' }[a.status];
+  const linkInfo = a.type==='Online Video'
+    ? (a.meetingLink ? ` · <a href="${esc(a.meetingLink)}" target="_blank" rel="noopener" style="color:var(--blue-700); font-weight:600;">${t('joinMeetingLink')}</a>`
+                      : ` · <span style="color:var(--warning); font-weight:600;">${t('meetingLinkPending')}</span>`)
+    : '';
+  return `
+    <div class="list-row">
+      <div class="list-row-main">
+        <div class="title">${esc(a.bookerName || a.bookerEmail || '—')} <span class="badge ${badgeClass}" style="margin-left:8px; vertical-align:middle;">${statusLabel(a.status)}</span></div>
+        <div class="meta">${esc(a.service)} · ${fmtDate(a.date)} · ${esc(a.time)} MYT · ${esc(typeLabel(a.type))} · ${t('summaryPIC')}: ${esc(a.officerName)}${linkInfo}</div>
+        <div class="meta" style="margin-top:2px;">${esc(a.bookerEmail||'')}${a.purpose ? ' · '+esc(a.purpose) : ''}</div>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        ${a.status==='Upcoming' ? `
+          <button class="btn btn-secondary btn-sm" onclick="adminMarkCompleted('${a.dbId}')">${state.lang==='ms'?'Tandakan Selesai':'Mark Completed'}</button>
+          <button class="btn btn-danger-ghost btn-sm" onclick="adminCancelAppt('${a.dbId}')">${t('cancelBtn')}</button>
+        ` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function setAdminFilter(f){ state.adminFilter = f; render(); }
+
+async function adminMarkCompleted(dbId){
+  const { error } = await sb.from('appointments').update({ status:'Completed', updated_at:new Date().toISOString() }).eq('id', dbId);
+  if(error){ toast((state.lang==='ms'?'Gagal: ':'Failed: ')+error.message, 'error'); return; }
+  await loadAllAppointments();
+  render();
+  toast(state.lang==='ms' ? 'Ditandakan selesai' : 'Marked as completed', 'success');
+}
+
+async function adminCancelAppt(dbId){
+  if(!confirm(state.lang==='ms' ? 'Batalkan tempahan ini?' : 'Cancel this appointment?')) return;
+  const { error } = await sb.from('appointments').update({ status:'Cancelled', updated_at:new Date().toISOString() }).eq('id', dbId);
+  if(error){ toast((state.lang==='ms'?'Gagal: ':'Failed: ')+error.message, 'error'); return; }
+  await loadAllAppointments();
+  render();
+  toast(t('toastCancelled'), 'success');
+}
+
 function appointmentRow(a, withActions){
   const badgeClass = { Upcoming:'badge-upcoming', Completed:'badge-completed', Cancelled:'badge-cancelled', Rescheduled:'badge-rescheduled' }[a.status];
   const linkNote = a.type==='Online Video'
-    ? (a.meetingLink ? `<br><a href="#" onclick="event.preventDefault(); toast(t('toastMeetingDemo'),'success')" style="color:var(--blue-700); font-weight:600;">${t('joinMeetingLink')}</a>`
+    ? (a.meetingLink ? `<br><a href="${esc(a.meetingLink)}" target="_blank" rel="noopener" style="color:var(--blue-700); font-weight:600;">${t('joinMeetingLink')}</a>`
                       : (a.status==='Upcoming' ? `<br><span style="color:var(--warning); font-weight:600;">${t('meetingLinkPending')}</span>` : ''))
     : '';
   return `
@@ -1832,7 +1970,8 @@ async function initApp(){
       id: data.session.user.id,
       name: profile ? profile.full_name : data.session.user.email,
       email: data.session.user.email,
-      org: profile ? profile.organisation : ''
+      org: profile ? profile.organisation : '',
+      role: profile ? profile.role : 'user'
     };
     await loadAppData();
     state.view = 'dashboard';
