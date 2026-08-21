@@ -313,6 +313,43 @@
   /* Cards / lists */
   .card{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-xs);}
   .list-row{display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid var(--border-soft); gap:14px; flex-wrap:wrap;}
+  .admin-tabs{display:flex; gap:6px; margin-bottom:22px; border-bottom:1.5px solid var(--border);}
+  .admin-tab{
+    background:transparent; border:none; padding:10px 18px; font-size:13.5px; font-weight:700;
+    color:var(--ink-muted); border-bottom:2.5px solid transparent; margin-bottom:-1.5px; font-family:var(--font-body);
+  }
+  .admin-tab:hover{color:var(--ink);}
+  .admin-tab.active{color:var(--blue-700); border-bottom-color:var(--blue-700);}
+
+  .report-controls{display:flex; align-items:flex-end; gap:14px; flex-wrap:wrap; margin-bottom:22px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:18px;}
+  .report-controls .field{margin-bottom:0;}
+  .report-controls .field label{font-size:12px;}
+  .report-controls input[type="date"]{padding:9px 12px; font-size:13.5px;}
+  .report-actions{display:flex; gap:10px; margin-left:auto; flex-wrap:wrap;}
+
+  .report-stat-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin-bottom:24px;}
+  .report-stat{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:16px 18px;}
+  .report-stat .num{font-family:var(--font-display); font-weight:900; font-size:26px; color:var(--blue-700);}
+  .report-stat .lbl{font-size:11.5px; color:var(--ink-muted); font-weight:600; text-transform:uppercase; letter-spacing:.02em; margin-top:2px;}
+
+  .report-section-title{font-family:var(--font-body); font-weight:800; font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-muted); margin:26px 0 12px;}
+  .report-table{width:100%; border-collapse:collapse; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden;}
+  .report-table th, .report-table td{text-align:left; padding:11px 16px; font-size:13px; border-bottom:1px solid var(--border-soft);}
+  .report-table th{background:var(--surface-2); font-weight:700; color:var(--ink-muted); font-size:11.5px; text-transform:uppercase; letter-spacing:.02em;}
+  .report-table tr:last-child td{border-bottom:none;}
+  .report-table td.num-cell{text-align:right; font-weight:700; font-family:var(--font-body);}
+
+  .print-only{display:none;}
+  @media print{
+    .proto-bar, .sidebar, .topbar, .no-print{display:none !important;}
+    .app-shell{display:block !important;}
+    .main{display:block !important;}
+    .content{max-width:none !important; padding:0 !important; margin:0 !important;}
+    body{background:#fff !important;}
+    .print-only{display:block !important; margin-bottom:18px;}
+    .report-table{border:1px solid #ccc;}
+    .report-stat, .report-table{break-inside:avoid;}
+  }
   .admin-filters{display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap;}
   .admin-filter-btn{
     background:#fff; border:1.5px solid var(--border); border-radius:var(--radius-pill); padding:8px 16px;
@@ -885,6 +922,9 @@ function freshState(){
     dayAvailability:{ slots:[], closed:false, reason:'' },
     pendingCancelId:null,
     lastBookingId:null,
+    adminView:'appointments',
+    reportFrom:null,
+    reportTo:null,
   };
 }
 state = freshState();
@@ -1801,6 +1841,23 @@ function renderMyAppointments(){
   `;
 }
 function renderAdmin(){
+  const view = state.adminView || 'appointments';
+  return `
+    <div class="page-head">
+      <div class="eyebrow" style="margin-bottom:6px;">${state.lang==='ms'?'Pentadbiran':'Administration'}</div>
+      <h1>${t('navAdmin')}</h1>
+      <p>${state.lang==='ms' ? 'Urus semua tempahan merentasi Perpustakaan PHCTM.' : 'Manage all appointments across the PHCTM Library.'}</p>
+    </div>
+    <div class="admin-tabs no-print">
+      <button class="admin-tab ${view==='appointments'?'active':''}" onclick="setAdminView('appointments')">${state.lang==='ms'?'Tempahan':'Appointments'}</button>
+      <button class="admin-tab ${view==='reports'?'active':''}" onclick="setAdminView('reports')">${state.lang==='ms'?'Laporan':'Reports'}</button>
+    </div>
+    ${view==='reports' ? renderAdminReports() : renderAdminAppointments()}
+  `;
+}
+function setAdminView(v){ state.adminView = v; render(); }
+
+function renderAdminAppointments(){
   const list = state.allAppointments || [];
   const filter = state.adminFilter || 'All';
   const filtered = filter==='All' ? list : list.filter(a=>a.status===filter);
@@ -1812,11 +1869,6 @@ function renderAdmin(){
   };
   const filterLabel = (f) => f==='All' ? (state.lang==='ms'?'Semua':'All') : statusLabel(f);
   return `
-    <div class="page-head">
-      <div class="eyebrow" style="margin-bottom:6px;">${state.lang==='ms'?'Pentadbiran':'Administration'}</div>
-      <h1>${t('navAdmin')}</h1>
-      <p>${state.lang==='ms' ? 'Urus semua tempahan merentasi Perpustakaan PHCTM.' : 'Manage all appointments across the PHCTM Library.'}</p>
-    </div>
     <div class="admin-filters">
       ${['All','Upcoming','Completed','Cancelled'].map(f=>`
         <button class="admin-filter-btn ${filter===f?'active':''}" onclick="setAdminFilter('${f}')">${filterLabel(f)} <span class="cnt">${counts[f]}</span></button>
@@ -1852,6 +1904,135 @@ function adminRow(a){
 }
 
 function setAdminFilter(f){ state.adminFilter = f; render(); }
+
+/* ============================= ADMIN REPORTS ============================= */
+function defaultReportRange(){
+  const now = new Date();
+  const first = new Date(now.getFullYear(), now.getMonth(), 1);
+  const pad = n => String(n).padStart(2,'0');
+  const iso = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  return { from: iso(first), to: iso(now) };
+}
+
+function reportRows(){
+  const range = { from: state.reportFrom, to: state.reportTo };
+  const all = state.allAppointments || [];
+  return all.filter(a => a.date >= range.from && a.date <= range.to);
+}
+
+function aggregateBy(rows, keyFn){
+  const map = {};
+  rows.forEach(r=>{
+    const k = keyFn(r) || (state.lang==='ms' ? '(Tiada)' : '(None)');
+    map[k] = (map[k]||0) + 1;
+  });
+  return Object.entries(map).sort((a,b)=>b[1]-a[1]);
+}
+
+function renderAdminReports(){
+  if(!state.reportFrom || !state.reportTo){
+    const d = defaultReportRange();
+    state.reportFrom = d.from; state.reportTo = d.to;
+  }
+  const rows = reportRows();
+  const total = rows.length;
+  const byStatus = { Upcoming:0, Completed:0, Cancelled:0, Rescheduled:0 };
+  rows.forEach(r=>{ byStatus[r.status] = (byStatus[r.status]||0) + 1; });
+  const byService = aggregateBy(rows, r=>r.service);
+  const byOfficer = aggregateBy(rows, r=>r.officerName);
+  const byType = aggregateBy(rows, r=>typeLabel(r.type));
+
+  const generatedAt = new Date().toLocaleString(state.lang==='ms' ? 'ms-MY' : 'en-GB');
+
+  return `
+    <div class="print-only">
+      <h2 style="font-family:var(--font-display); font-size:22px; margin-bottom:4px;">${state.lang==='ms'?'Laporan Tempahan':'Appointment Report'} — i-Connect @ PHCTM Library</h2>
+      <p style="color:var(--ink-muted); font-size:13px;">${fmtDate(state.reportFrom)} – ${fmtDate(state.reportTo)} · ${state.lang==='ms'?'Dijana pada':'Generated on'} ${generatedAt}</p>
+    </div>
+
+    <div class="report-controls no-print">
+      <div class="field">
+        <label>${state.lang==='ms'?'Dari tarikh':'From date'}</label>
+        <input type="date" value="${state.reportFrom}" onchange="state.reportFrom=this.value; render();">
+      </div>
+      <div class="field">
+        <label>${state.lang==='ms'?'Hingga tarikh':'To date'}</label>
+        <input type="date" value="${state.reportTo}" onchange="state.reportTo=this.value; render();">
+      </div>
+      <div class="report-actions">
+        <button class="btn btn-secondary btn-sm" onclick="downloadReportCSV()">⬇ ${state.lang==='ms'?'Muat turun CSV/Excel':'Download CSV/Excel'}</button>
+        <button class="btn btn-primary btn-sm" onclick="window.print()">🖨 ${state.lang==='ms'?'Muat turun PDF':'Download PDF'}</button>
+      </div>
+    </div>
+
+    <div class="report-stat-grid">
+      <div class="report-stat"><div class="num">${total}</div><div class="lbl">${state.lang==='ms'?'Jumlah':'Total'}</div></div>
+      <div class="report-stat"><div class="num">${byStatus.Upcoming||0}</div><div class="lbl">${statusLabel('Upcoming')}</div></div>
+      <div class="report-stat"><div class="num">${byStatus.Completed||0}</div><div class="lbl">${statusLabel('Completed')}</div></div>
+      <div class="report-stat"><div class="num">${byStatus.Cancelled||0}</div><div class="lbl">${statusLabel('Cancelled')}</div></div>
+    </div>
+
+    <div class="report-section-title">${state.lang==='ms'?'Ikut Servis':'By Service'}</div>
+    <table class="report-table">
+      <thead><tr><th>${state.lang==='ms'?'Servis':'Service'}</th><th style="text-align:right;">${state.lang==='ms'?'Bilangan':'Count'}</th></tr></thead>
+      <tbody>
+        ${byService.length ? byService.map(([k,v])=>`<tr><td>${esc(k)}</td><td class="num-cell">${v}</td></tr>`).join('') : `<tr><td colspan="2" style="color:var(--ink-muted);">${state.lang==='ms'?'Tiada data':'No data'}</td></tr>`}
+      </tbody>
+    </table>
+
+    <div class="report-section-title">${state.lang==='ms'?'Ikut Pegawai (PIC)':'By Officer (PIC)'}</div>
+    <table class="report-table">
+      <thead><tr><th>${t('summaryPIC')}</th><th style="text-align:right;">${state.lang==='ms'?'Bilangan':'Count'}</th></tr></thead>
+      <tbody>
+        ${byOfficer.length ? byOfficer.map(([k,v])=>`<tr><td>${esc(k)}</td><td class="num-cell">${v}</td></tr>`).join('') : `<tr><td colspan="2" style="color:var(--ink-muted);">${state.lang==='ms'?'Tiada data':'No data'}</td></tr>`}
+      </tbody>
+    </table>
+
+    <div class="report-section-title">${state.lang==='ms'?'Ikut Jenis Janji Temu':'By Appointment Type'}</div>
+    <table class="report-table">
+      <thead><tr><th>${state.lang==='ms'?'Jenis':'Type'}</th><th style="text-align:right;">${state.lang==='ms'?'Bilangan':'Count'}</th></tr></thead>
+      <tbody>
+        ${byType.length ? byType.map(([k,v])=>`<tr><td>${esc(k)}</td><td class="num-cell">${v}</td></tr>`).join('') : `<tr><td colspan="2" style="color:var(--ink-muted);">${state.lang==='ms'?'Tiada data':'No data'}</td></tr>`}
+      </tbody>
+    </table>
+
+    <div class="report-section-title">${state.lang==='ms'?'Senarai Terperinci':'Detailed List'} (${total})</div>
+    <table class="report-table">
+      <thead><tr>
+        <th>${state.lang==='ms'?'Rujukan':'Ref'}</th><th>${state.lang==='ms'?'Nama':'Name'}</th><th>${state.lang==='ms'?'Servis':'Service'}</th>
+        <th>${t('summaryPIC')}</th><th>${state.lang==='ms'?'Tarikh':'Date'}</th><th>${state.lang==='ms'?'Masa':'Time'}</th><th>${state.lang==='ms'?'Status':'Status'}</th>
+      </tr></thead>
+      <tbody>
+        ${rows.length ? rows.map(r=>`<tr>
+          <td>${esc(r.id)}</td><td>${esc(r.bookerName)}</td><td>${esc(r.service)}</td><td>${esc(r.officerName)}</td>
+          <td>${fmtDate(r.date)}</td><td>${esc(r.time)}</td><td>${statusLabel(r.status)}</td>
+        </tr>`).join('') : `<tr><td colspan="7" style="color:var(--ink-muted);">${state.lang==='ms'?'Tiada tempahan dalam julat tarikh ini':'No appointments in this date range'}</td></tr>`}
+      </tbody>
+    </table>
+  `;
+}
+
+function downloadReportCSV(){
+  const rows = reportRows();
+  const headers = ['Booking Ref','Name','Email','Service','Officer','Type','Date','Time','Status','Purpose'];
+  const csvRows = [headers.join(',')];
+  rows.forEach(r=>{
+    const vals = [r.id, r.bookerName, r.bookerEmail, r.service, r.officerName, typeLabel(r.type), r.date, r.time, statusLabel(r.status), r.purpose]
+      .map(v => `"${String(v||'').replace(/"/g,'""')}"`);
+    csvRows.push(vals.join(','));
+  });
+  const csvContent = csvRows.join('\r\n');
+  const blob = new Blob(['\ufeff'+csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `laporan-i-connect-${state.reportFrom}-hingga-${state.reportTo}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast(state.lang==='ms' ? 'CSV dimuat turun' : 'CSV downloaded', 'success');
+}
 
 async function adminMarkCompleted(dbId){
   const { error } = await sb.from('appointments').update({ status:'Completed', updated_at:new Date().toISOString() }).eq('id', dbId);
